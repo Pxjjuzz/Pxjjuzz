@@ -34,15 +34,15 @@ BIRTHDAY = date(2008, 1, 16)
 
 ABOUT = {
     "os": "Windows 11, Android 15",
-    "host": "Sri Sairam College of Engineering",
-    "kernel": "BE AIML Student",
-    "ide": "VS Code, Antigravity",
+    "host": "SSCE Bangalore",
+    "kernel": "BE AIML",
+    "ide": "VS Code, Antigravity, OpenCode",
 }
 STACK = [
     ("Languages.Programming", "Python, C, JavaScript, TypeScript"),
     ("Languages.Computer", "HTML, CSS, JSON, YAML"),
-    ("Languages.Real", "English, Kannada"),
-    ("Hobbies", "AI/ML, full-stack, video editing, gaming"),
+    ("Languages.Real", "English, Hindi, Kannada"),
+    ("Hobbies", "AI/ML, full-stack, video editing"),
 ]
 PROJECTS = [
     ("AFTERGLOW", "desktop media player"),
@@ -50,7 +50,7 @@ PROJECTS = [
     ("VenueOne", "venue booking platform"),
     ("SNAPBREEDAI", "breed classifier, Streamlit"),
 ]
-LINKS = ["github.com/Pxjjuzz", "linkedin.com/in/prajwal-poojary", "prajwalpoojary834@gmail.com"]
+LINKS = ["github.com/Pxjjuzz", "linkedin.com/in/prajwal-poojary-b4a53a386", "prajwalpoojary834@gmail.com"]
 
 # ---------------------------------------------------------------------------
 # canvas
@@ -270,19 +270,10 @@ def render(theme_name: str, stats: dict, light_art: str = "tile") -> str:
         y += height
 
     # header ---------------------------------------------------------------
-    y += 8
-    panel.append(
-        f'<text x="{PANEL_X}" y="{round(y, 2)}" font-size="27" font-weight="bold" '
-        f'fill="{t["text"]}">prajwal@pxjjuzz</text>'
-    )
-    panel.append(
-        f'<text x="{x_of(53)}" y="{round(y, 2)}" font-size="12" fill="{t["muted"]}" '
-        f'text-anchor="end">synced {stats["updated"]}</text>'
-    )
     y += 24
     panel.append(
         f'<text x="{PANEL_X}" y="{round(y, 2)}" font-size="14" fill="{t["muted"]}">'
-        f'BE AIML student · Bengaluru, India</text>'
+        f'BE AIML · Bengaluru, India</text>'
     )
     y += 20
     panel.append(
@@ -299,7 +290,7 @@ def render(theme_name: str, stats: dict, light_art: str = "tile") -> str:
     text_row(section("system", t), height=20, dy=4)
     text_row(kv("OS", ABOUT["os"], 26, t))
     text_row(kv("Uptime", stats["age"], 26, t))
-    text_row(kv("Host", "Sri Sairam College of Engg.", 26, t))
+    text_row(kv("Host", "SSCE Bangalore.", 26, t))
     text_row(kv("Kernel", ABOUT["kernel"], 26, t))
     text_row(kv("IDE", ABOUT["ide"], 26, t))
 
@@ -360,7 +351,7 @@ def render(theme_name: str, stats: dict, light_art: str = "tile") -> str:
     text_row(section("contact", t), height=20, dy=12)
     y += 4
     bx = PANEL_X
-    for prefix, text in (("gh:", "Pxjjuzz"), ("in:", "prajwal-poojary"), ("@", "prajwalpoojary834@gmail.com")):
+    for prefix, text in (("gh:", "Pxjjuzz"), ("in:", "prajwal-poojary-b4a53a386"), ("@", "prajwalpoojary834@gmail.com")):
         markup, width = badge(prefix, text, bx, y, t)
         graphics.append(markup)
         bx += width + 8
