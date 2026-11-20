@@ -1,0 +1,608 @@
+"""Render dark_mode.svg and light_mode.svg for the Pxjjuzz profile card.
+
+The card is a single ASCII portrait plus a terminal panel. Everything in the
+panel is regenerated each run, so there is no patching of pre-made SVGs and no
+risk of XML namespace damage.
+
+Usage:
+    python build.py            # fetch live stats (needs GITHUB_TOKEN / ACCESS_TOKEN)
+    python build.py --offline  # render from cache/stats.json, never hit the API
+    python build.py --sample   # render with fake numbers, writes to preview/
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from datetime import date
+from pathlib import Path
+
+import requests
+
+ROOT = Path(__file__).resolve().parent
+CACHE = ROOT / "cache"
+STATS_CACHE = CACHE / "stats.json"
+REPO_CACHE = CACHE / "repos.json"
+ASCII_FILE = ROOT / "ascii.txt"
+
+LOGIN = "Pxjjuzz"
+BIRTHDAY = date(2008, 1, 16)
+
+ABOUT = {
+    "os": "Windows 11, Android 15",
+    "host": "Sri Sairam College of Engineering",
+    "kernel": "BE AIML Student",
+    "ide": "VS Code, Antigravity",
+}
+STACK = [
+    ("Languages.Programming", "Python, C, JavaScript, TypeScript"),
+    ("Languages.Computer", "HTML, CSS, JSON, YAML"),
+    ("Languages.Real", "English, Kannada"),
+    ("Hobbies", "AI/ML, full-stack, video editing, gaming"),
+]
+PROJECTS = [
+    ("AFTERGLOW", "desktop media player"),
+    ("AEROBLEND-AI", "AI + NWP weather models"),
+    ("VenueOne", "venue booking platform"),
+    ("SNAPBREEDAI", "breed classifier, Streamlit"),
+]
+LINKS = ["github.com/Pxjjuzz", "linkedin.com/in/prajwal-poojary", "prajwalpoojary834@gmail.com"]
+
+# ---------------------------------------------------------------------------
+# canvas
+# ---------------------------------------------------------------------------
+W, H = 1240, 960
+ART_X, ART_Y, ART_SIZE, ART_LEADING = 24, 24, 4.3, 5.85
+PANEL_X = 620
+PANEL_W = 590
+DIVIDER_X = 596
+PAD_TOP = 34
+
+BODY = 19.5
+ADVANCE = BODY * 0.55
+ROW = 22.5
+
+THEMES = {
+    "dark": {
+        "bg": "#0d1117",
+        "frame": "#30363d",
+        "text": "#c9d1d9",
+        "key": "#ffa657",
+        "value": "#a5d6ff",
+        "muted": "#6e7681",
+        "green": "#3fb950",
+        "red": "#f85149",
+        "accent": "#58a6ff",
+        "track": "#21262d",
+        "badge": "#161b22",
+        "art": "#8b949e",
+        "cursor": "#3fb950",
+    },
+    "light": {
+        "bg": "#f6f8fa",
+        "frame": "#d0d7de",
+        "text": "#1f2328",
+        "key": "#953800",
+        "value": "#0a3069",
+        "muted": "#6e7781",
+        "green": "#1a7f37",
+        "red": "#cf222e",
+        "accent": "#0969da",
+        "track": "#eaeef2",
+        "badge": "#ffffff",
+        "art": "#57606a",
+        "cursor": "#1a7f37",
+    },
+}
+
+STYLE = """@font-face {{
+  src: local('Consolas'), local('Consolas Bold'), local('DejaVu Sans Mono');
+  font-family: 'MonoFallback';
+  font-display: swap;
+  size-adjust: 109%;
+}}
+text, tspan {{ white-space: pre; }}
+.section {{ letter-spacing: 2.6px; }}
+@keyframes blink {{ 0%, 49% {{ opacity: 1; }} 50%, 100% {{ opacity: 0; }} }}
+.cursor {{ animation: blink 1.1s steps(1, end) infinite; }}
+@keyframes pulse {{ 0%, 100% {{ opacity: .35; }} 50% {{ opacity: 1; }} }}
+.dot {{ animation: pulse 2.4s ease-in-out infinite; }}
+"""
+
+
+def esc(text: str) -> str:
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def age(days_from_birth: date = BIRTHDAY, today: date | None = None) -> str:
+    today = today or date.today()
+    years = today.year - days_from_birth.year
+    months = today.month - days_from_birth.month
+    days = today.day - days_from_birth.day
+    if days < 0:
+        months -= 1
+        prev = today.replace(day=1) - __import__("datetime").timedelta(days=1)
+        days += prev.day
+    if months < 0:
+        years -= 1
+        months += 12
+    return f"{years}y {months}m {days}d"
+
+
+def fmt(n: int) -> str:
+    return f"{n:,}"
+
+
+# ---------------------------------------------------------------------------
+# artwork
+# ---------------------------------------------------------------------------
+# Light mode needs the ink density flipped, otherwise the portrait turns into a
+# black blob on a white card.
+RAMP = " .:-=+*#%@"
+FLIP = {c: RAMP[len(RAMP) - 1 - i] for i, c in enumerate(RAMP)}
+
+
+def load_art(invert: bool) -> list[str]:
+    rows = [line.rstrip() for line in ASCII_FILE.read_text(encoding="utf-8").splitlines()]
+    if invert:
+        rows = ["".join(FLIP.get(c, c) for c in row) for row in rows]
+    return rows
+
+
+def art_block(rows: list[str], colour: str) -> str:
+    spans = []
+    y = ART_Y
+    for row in rows:
+        if row:
+            spans.append(f'<tspan x="{ART_X}" y="{round(y, 2)}">{esc(row)}</tspan>')
+        y += ART_LEADING
+    return (
+        f'<text font-size="{ART_SIZE}" fill="{colour}" xml:space="preserve">'
+        + "".join(spans)
+        + "</text>"
+    )
+
+
+# ---------------------------------------------------------------------------
+# panel primitives
+# ---------------------------------------------------------------------------
+def x_of(col: float) -> float:
+    return round(PANEL_X + col * ADVANCE, 2)
+
+
+def row_of(*segments: tuple[float, str, str]) -> str:
+    """segments: (column, text, colour)"""
+    return "".join(
+        f'<tspan x="{x_of(col)}" fill="{colour}">{esc(text)}</tspan>'
+        for col, text, colour in segments
+        if text
+    )
+
+
+def kv(key: str, value: str, value_col: int, t: dict, key_col: int = 0) -> str:
+    dots = max(2, value_col - key_col - len(key) - 2)
+    return row_of(
+        (key_col, key, t["key"]),
+        (key_col + len(key), " " + "." * dots + " ", t["muted"]),
+        (value_col, value, t["value"]),
+    )
+
+
+def section(label: str, t: dict) -> str:
+    rule = "─" * int((PANEL_W / ADVANCE) - len(label) - 3)
+    return row_of((0, label.upper(), t["muted"]), (len(label) + 1, " " + rule, t["frame"]))
+
+
+def indent(text: str, t: dict) -> str:
+    return row_of((1, text, t["value"]))
+
+
+def bar(label: str, pct: float, colour: str, t: dict, baseline: float) -> tuple[str, str]:
+    """Returns (label text row, bar graphics) for one language row."""
+    label_row = row_of((1, label, t["text"]), (21, f"{pct:.0f}%", t["text"]))
+    track_x = x_of(25)
+    track_w = 250
+    fill_w = max(4.0, track_w * pct / 100.0)
+    top = round(baseline - 8, 1)
+    gfx = (
+        f'<rect x="{track_x}" y="{top}" width="{track_w}" height="7" rx="3.5" fill="{t["track"]}"/>'
+        f'<rect x="{track_x}" y="{top}" width="{round(fill_w, 1)}" height="7" rx="3.5" fill="{colour}"/>'
+    )
+    return label_row, gfx
+
+
+def badge(prefix: str, text: str, x: float, y: float, t: dict) -> tuple[str, float]:
+    width = (len(prefix) + len(text)) * 7.55 + 26
+    markup = (
+        f'<g transform="translate(0, {round(y, 1)})">'
+        f'<rect x="{round(x, 1)}" y="0" width="{round(width, 1)}" height="27" rx="7" '
+        f'fill="{t["badge"]}" stroke="{t["frame"]}"/>'
+        f'<text x="{round(x + 13, 1)}" y="18.5" font-size="12" font-family="inherit">'
+        f'<tspan fill="{t["accent"]}">{esc(prefix)}</tspan>'
+        f'<tspan fill="{t["text"]}">{esc(text)}</tspan></text></g>'
+    )
+    return markup, width
+
+
+# ---------------------------------------------------------------------------
+# card
+# ---------------------------------------------------------------------------
+def render(theme_name: str, stats: dict, light_art: str = "tile") -> str:
+    t = THEMES[theme_name]
+    tile = ""
+    art_colour = t["art"]
+    invert = False
+    if theme_name == "light":
+        if light_art == "flip":
+            invert = True
+            art_colour = "#57606a"
+        elif light_art == "ink":
+            art_colour = "#3d444d"
+        else:  # tile: keep the portrait as a real photo panel on the light card
+            tile = (
+                f'<rect x="22" y="22" width="{DIVIDER_X - 40}" height="{H - 44}" rx="12" '
+                f'fill="#0d1117" stroke="{t["frame"]}" stroke-opacity=".9"/>'
+            )
+            art_colour = "#8b949e"
+    art = load_art(invert=invert)
+
+    panel: list[str] = []
+    graphics: list[str] = []
+    y = PAD_TOP
+
+    def text_row(markup: str, height: float = ROW, dy: float = 0) -> None:
+        nonlocal y
+        y += dy
+        panel.append(f'<text x="{PANEL_X}" y="{round(y, 2)}" font-size="{BODY}">{markup}</text>')
+        y += height
+
+    # header ---------------------------------------------------------------
+    y += 8
+    panel.append(
+        f'<text x="{PANEL_X}" y="{round(y, 2)}" font-size="27" font-weight="bold" '
+        f'fill="{t["text"]}">prajwal@pxjjuzz</text>'
+    )
+    panel.append(
+        f'<text x="{x_of(53)}" y="{round(y, 2)}" font-size="12" fill="{t["muted"]}" '
+        f'text-anchor="end">synced {stats["updated"]}</text>'
+    )
+    y += 24
+    panel.append(
+        f'<text x="{PANEL_X}" y="{round(y, 2)}" font-size="14" fill="{t["muted"]}">'
+        f'BE AIML student · Bengaluru, India</text>'
+    )
+    y += 20
+    panel.append(
+        f'<circle cx="{round(PANEL_X + 4, 1)}" cy="{round(y - 4.6, 1)}" r="4" '
+        f'fill="{t["cursor"]}" class="dot"/>'
+    )
+    panel.append(
+        f'<text x="{round(PANEL_X + 15, 1)}" y="{round(y, 2)}" font-size="13" fill="{t["value"]}">'
+        f'shipping AFTERGLOW &amp; whatever else looks fun</text>'
+    )
+    y += 14
+
+    # system ---------------------------------------------------------------
+    text_row(section("system", t), height=20, dy=4)
+    text_row(kv("OS", ABOUT["os"], 26, t))
+    text_row(kv("Uptime", stats["age"], 26, t))
+    text_row(kv("Host", "Sri Sairam College of Engg.", 26, t))
+    text_row(kv("Kernel", ABOUT["kernel"], 26, t))
+    text_row(kv("IDE", ABOUT["ide"], 26, t))
+
+    # stack ----------------------------------------------------------------
+    text_row(section("stack", t), height=20, dy=12)
+    for key, value in STACK:
+        text_row(row_of((0, key, t["key"])))
+        text_row(indent(value, t))
+
+    # github ---------------------------------------------------------------
+    text_row(section("github", t), height=20, dy=12)
+    text_row(
+        kv("Repositories", fmt(stats["repos"]), 19, t)
+        + kv("Stars", fmt(stats["stars"]), 43, t, key_col=26)
+    )
+    text_row(
+        kv("Contributions", fmt(stats["contributions"]), 19, t)
+        + kv("Followers", fmt(stats["followers"]), 43, t, key_col=26)
+    )
+    text_row(
+        kv("Commits", fmt(stats["commits"]), 19, t)
+        + kv("Streak", f'{stats["streak"]}d', 43, t, key_col=26)
+    )
+    text_row(kv("Lines of code", fmt(stats["loc"]), 19, t))
+    added = f'+{fmt(stats["loc_add"])}'
+    removed = f'-{fmt(stats["loc_del"])}'
+    del_col = 1 + len(added) + 3
+    text_row(
+        row_of(
+            (1, added, t["green"]),
+            (1 + len(added), " ++", t["green"]),
+            (del_col, removed, t["red"]),
+            (del_col + len(removed), " --", t["red"]),
+        )
+        + kv("best streak", f'{stats["best"]}d', 43, t, key_col=26),
+        height=18,
+    )
+
+    # languages ------------------------------------------------------------
+    text_row(section("top languages", t), height=20, dy=12)
+    for name, pct, colour in stats["langs"]:
+        label_row, gfx = bar(name, pct, colour, t, baseline=y)
+        text_row(label_row, height=21)
+        graphics.append(gfx)
+
+    # projects -------------------------------------------------------------
+    text_row(section("building", t), height=20, dy=12)
+    for name, blurb in PROJECTS:
+        dots = max(2, 21 - len(name) - 2)
+        text_row(
+            row_of((0, name, t["text"]), (len(name), " " + "." * dots + " ", t["muted"]))
+            + f'<tspan x="{x_of(22)}" fill="{t["muted"]}" font-size="13">{esc(blurb)}</tspan>',
+            height=22,
+        )
+
+    # contact --------------------------------------------------------------
+    text_row(section("contact", t), height=20, dy=12)
+    y += 4
+    bx = PANEL_X
+    for prefix, text in (("gh:", "Pxjjuzz"), ("in:", "prajwal-poojary"), ("@", "prajwalpoojary834@gmail.com")):
+        markup, width = badge(prefix, text, bx, y, t)
+        graphics.append(markup)
+        bx += width + 8
+    y += 40
+
+    # footer ---------------------------------------------------------------
+    foot_y = H - 28
+    foot_text = "built with code, caffeine & curiosity"
+    panel.append(
+        f'<text x="{PANEL_X}" y="{foot_y}" font-size="13" fill="{t["muted"]}">'
+        f'<tspan>{esc(foot_text)}</tspan>'
+        f'<tspan dx="7" fill="{t["cursor"]}" class="cursor">█</tspan></text>'
+    )
+
+    svg = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" '
+        f'viewBox="0 0 {W} {H}" font-family="MonoFallback, Consolas, \'DejaVu Sans Mono\', monospace">',
+        f"<style>\n{STYLE.format()}</style>",
+        f'<rect width="{W}" height="{H}" rx="18" fill="{t["bg"]}"/>',
+        f'<rect x="12" y="12" width="{W - 24}" height="{H - 24}" rx="14" fill="none" '
+        f'stroke="{t["frame"]}" stroke-opacity=".6"/>',
+        tile,
+        art_block(art, art_colour),
+        f'<path d="M{DIVIDER_X} 40V{H - 40}" stroke="{t["frame"]}" stroke-opacity=".55"/>',
+        *panel,
+        *graphics,
+        "</svg>",
+    ]
+    return "\n".join(svg) + "\n"
+
+
+# ---------------------------------------------------------------------------
+# data
+# ---------------------------------------------------------------------------
+def token() -> str | None:
+    return os.getenv("ACCESS_TOKEN") or os.getenv("GITHUB_TOKEN")
+
+
+def gh(query: str, variables: dict, tok: str) -> dict:
+    r = requests.post(
+        "https://api.github.com/graphql",
+        json={"query": query, "variables": variables},
+        headers={"Authorization": f"Bearer {tok}", "Accept": "application/vnd.github+json"},
+        timeout=40,
+    )
+    r.raise_for_status()
+    payload = r.json()
+    if payload.get("errors"):
+        raise RuntimeError(payload["errors"])
+    return payload["data"]
+
+
+USER_QUERY = """
+query ($login: String!) {
+  user(login: $login) {
+    id
+    followers { totalCount }
+    repositories(first: 100, ownerAffiliations: OWNER) {
+      totalCount
+      nodes {
+        nameWithOwner
+        stargazers { totalCount }
+        defaultBranchRef { target { ... on Commit { history { totalCount } } } }
+        languages(first: 8, orderBy: {field: SIZE, direction: DESC}) {
+          edges { size node { name color } }
+        }
+      }
+    }
+    contributionsCollection {
+      contributionCalendar {
+        totalContributions
+        weeks { contributionDays { date contributionCount } }
+      }
+    }
+  }
+}
+"""
+
+HISTORY_QUERY = """
+query ($owner: String!, $name: String!, $cursor: String) {
+  repository(owner: $owner, name: $name) {
+    defaultBranchRef { target { ... on Commit {
+      history(first: 100, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        edges { node { additions deletions author { user { login } } } }
+      }
+    } } }
+  }
+}
+"""
+
+
+def streaks(days: list[dict]) -> tuple[int, int]:
+    days = sorted(days, key=lambda d: d["date"])
+    current = best = run = 0
+    for d in days:
+        if d["contributionCount"] > 0:
+            run += 1
+            best = max(best, run)
+        else:
+            run = 0
+    for d in reversed(days):
+        if d["contributionCount"] > 0:
+            current += 1
+        else:
+            break
+    return current, best
+
+
+def repo_lines(owner: str, name: str, login: str, tok: str, head: int, cache: dict) -> dict:
+    """Count my commits and their diff size in one repo, reusing cache when HEAD is unchanged."""
+    key = f"{owner}/{name}"
+    old = cache.get(key)
+    if old and old.get("head") == head:
+        return old
+    commits = add = dele = 0
+    cursor = None
+    while True:
+        data = gh(HISTORY_QUERY, {"owner": owner, "name": name, "cursor": cursor}, tok)
+        branch = data["repository"]["defaultBranchRef"]
+        if branch is None:
+            break
+        hist = branch["target"]["history"]
+        for edge in hist["edges"]:
+            node = edge["node"]
+            user = (node.get("author") or {}).get("user") or {}
+            if user.get("login", "").lower() == login.lower():
+                commits += 1
+                add += node["additions"]
+                dele += node["deletions"]
+        if not hist["pageInfo"]["hasNextPage"]:
+            break
+        cursor = hist["pageInfo"]["endCursor"]
+    result = {"head": head, "commits": commits, "add": add, "del": dele}
+    cache[key] = result
+    return result
+
+
+def collect(tok: str) -> dict:
+    CACHE.mkdir(exist_ok=True)
+    repo_cache = json.loads(REPO_CACHE.read_text()) if REPO_CACHE.exists() else {}
+
+    data = gh(USER_QUERY, {"login": LOGIN}, tok)
+    user = data["user"]
+    repos = user["repositories"]
+
+    lang_size: dict[str, int] = {}
+    lang_colour: dict[str, str] = {}
+    for node in repos["nodes"]:
+        for edge in node["languages"]["edges"]:
+            name = edge["node"]["name"]
+            lang_size[name] = lang_size.get(name, 0) + edge["size"]
+            lang_colour[name] = edge["node"]["color"] or "#8b949e"
+
+    commits = loc_add = loc_del = 0
+    for node in repos["nodes"]:
+        branch = node["defaultBranchRef"]
+        if not branch:
+            continue
+        head = branch["target"]["history"]["totalCount"]
+        owner, name = node["nameWithOwner"].split("/")
+        stats = repo_lines(owner, name, LOGIN, tok, head, repo_cache)
+        commits += stats["commits"]
+        loc_add += stats["add"]
+        loc_del += stats["del"]
+
+    REPO_CACHE.write_text(json.dumps(repo_cache, indent=2, sort_keys=True))
+
+    days = [
+        d
+        for week in user["contributionsCollection"]["contributionCalendar"]["weeks"]
+        for d in week["contributionDays"]
+    ]
+    current, best = streaks(days)
+
+    total = sum(lang_size.values()) or 1
+    langs = [
+        (name, size * 100 / total, lang_colour[name])
+        for name, size in sorted(lang_size.items(), key=lambda kv: -kv[1])[:5]
+    ]
+
+    return {
+        "updated": date.today().isoformat(),
+        "age": age(),
+        "repos": repos["totalCount"],
+        "stars": sum(n["stargazers"]["totalCount"] for n in repos["nodes"]),
+        "contributions": user["contributionsCollection"]["contributionCalendar"]["totalContributions"],
+        "followers": user["followers"]["totalCount"],
+        "commits": commits,
+        "streak": current,
+        "best": best,
+        "loc_add": loc_add,
+        "loc_del": loc_del,
+        "loc": loc_add - loc_del,
+        "langs": langs,
+    }
+
+
+SAMPLE = {
+    "updated": "2026-11-20",
+    "age": age(),
+    "repos": 7,
+    "stars": 5,
+    "contributions": 184,
+    "followers": 1,
+    "commits": 236,
+    "streak": 4,
+    "best": 11,
+    "loc_add": 18422,
+    "loc_del": 3121,
+    "loc": 15301,
+    "langs": [
+        ("TypeScript", 46.2, "#3178c6"),
+        ("Python", 27.9, "#3572A5"),
+        ("JavaScript", 12.4, "#f1e05a"),
+        ("CSS", 8.1, "#563d7c"),
+        ("HTML", 5.4, "#e34c26"),
+    ],
+}
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--offline", action="store_true", help="use cache/stats.json only")
+    parser.add_argument("--sample", action="store_true", help="fake numbers, write to preview/")
+    parser.add_argument("--light-art", default="tile", choices=["tile", "flip", "ink"],
+                        help="how the portrait is drawn on the light card")
+    args = parser.parse_args()
+
+    if args.sample:
+        stats = SAMPLE
+    elif args.offline:
+        stats = json.loads(STATS_CACHE.read_text())
+        stats["age"] = age()
+        stats["updated"] = date.today().isoformat()
+    else:
+        tok = token()
+        if not tok:
+            print("no ACCESS_TOKEN / GITHUB_TOKEN set", file=sys.stderr)
+            return 1
+        stats = collect(tok)
+        CACHE.mkdir(exist_ok=True)
+        STATS_CACHE.write_text(json.dumps(stats, indent=2))
+
+    out = ROOT / "preview" if args.sample else ROOT
+    out.mkdir(exist_ok=True)
+    for theme in ("dark", "light"):
+        (out / f"{theme}_mode.svg").write_text(
+            render(theme, stats, args.light_art), encoding="utf-8"
+        )
+    print(f"rendered {out} ({stats['repos']} repos, {stats['commits']} commits)")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

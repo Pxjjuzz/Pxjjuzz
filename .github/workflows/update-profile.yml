@@ -1,31 +1,48 @@
-name: Update GitHub profile
+name: Update profile card
 
 on:
   schedule:
-    - cron: "17 0 * * *"
+    - cron: "17 2 * * *"
   workflow_dispatch:
+  push:
+    branches: [main]
 
 permissions:
   contents: write
 
+concurrency:
+  group: profile-card
+  cancel-in-progress: false
+
 jobs:
-  update-profile:
+  render:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+
       - name: Install dependencies
         run: pip install -r requirements.txt
-      - name: Update profile stats
+
+      - name: Render dark_mode.svg and light_mode.svg
         env:
-          USER_NAME: Pxjjuzz
-          ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN || secrets.GITHUB_TOKEN }}
-        run: python today.py
-      - name: Commit updated SVGs
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: "chore: refresh profile stats"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python build.py
+
+      - name: Commit changed cards
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add dark_mode.svg light_mode.svg cache
+          if git diff --cached --quiet; then
+            echo "nothing to commit"
+          else
+            git commit -m "chore: refresh profile card [skip ci]"
+            git push
+          fi
