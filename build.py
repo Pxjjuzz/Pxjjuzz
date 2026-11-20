@@ -185,10 +185,19 @@ def row_of(*segments: tuple[float, str, str]) -> str:
 
 def kv(key: str, value: str, value_col: int, t: dict, key_col: int = 0) -> str:
     dots = max(2, value_col - key_col - len(key) - 2)
-    return row_of(
-        (key_col, key, t["key"]),
-        (key_col + len(key), " " + "." * dots + " ", t["muted"]),
-        (value_col, value, t["value"]),
+    return (
+        row_of((key_col, key, t["key"]))
+        + leaders(key_col + len(key), dots, t)
+        + row_of((value_col, value, t["value"]))
+    )
+
+
+def leaders(col: float, count: int, t: dict) -> str:
+    """Dot run pinned to the exact column width, so it lands before the value in any font."""
+    return (
+        f'<tspan x="{x_of(col + 1)}" fill="{t["muted"]}" '
+        f'textLength="{round(count * ADVANCE, 1)}" lengthAdjust="spacingAndGlyphs">'
+        f'{"." * count}</tspan>'
     )
 
 
@@ -341,7 +350,8 @@ def render(theme_name: str, stats: dict, light_art: str = "tile") -> str:
     for name, blurb in PROJECTS:
         dots = max(2, 21 - len(name) - 2)
         text_row(
-            row_of((0, name, t["text"]), (len(name), " " + "." * dots + " ", t["muted"]))
+            row_of((0, name, t["text"]))
+            + leaders(len(name), dots, t)
             + f'<tspan x="{x_of(22)}" fill="{t["muted"]}" font-size="13">{esc(blurb)}</tspan>',
             height=22,
         )
