@@ -15,7 +15,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
+import time
 from datetime import date
 from pathlib import Path
 
@@ -384,28 +386,34 @@ def render(theme_name: str, stats: dict, light_art: str = "tile") -> str:
 # ---------------------------------------------------------------------------
 # data
 # ---------------------------------------------------------------------------
+API = "https://api.github.com"
+
+
 def token() -> str | None:
     return os.getenv("ACCESS_TOKEN") or os.getenv("GITHUB_TOKEN")
 
 
+def headers(tok: str) -> dict:
+    return {"Authorization": f"Bearer {tok}", "Accept": "application/vnd.github+json"}
+
+
 def gh(query: str, variables: dict, tok: str) -> dict:
     r = requests.post(
-        "https://api.github.com/graphql",
+        f"{API}/graphql",
         json={"query": query, "variables": variables},
-        headers={"Authorization": f"Bearer {tok}", "Accept": "application/vnd.github+json"},
+        headers=headers(tok),
         timeout=40,
     )
     r.raise_for_status()
     payload = r.json()
     if payload.get("errors"):
-        raise RuntimeError(payload["errors"])
+        raise RuntimeError(str(payload["errors"])[:300])
     return payload["data"]
 
 
-USER_QUERY = """
+PROFILE_QUERY = """
 query ($login: String!) {
   user(login: $login) {
-    id
     followers { totalCount }
     repositories(first: 100, ownerAffiliations: OWNER) {
       totalCount
@@ -418,6 +426,13 @@ query ($login: String!) {
         }
       }
     }
+  }
+}
+"""
+
+CONTRIB_QUERY = """
+query ($login: String!) {
+  user(login: $login) {
     contributionsCollection {
       contributionCalendar {
         totalContributions
@@ -442,28 +457,119 @@ query ($owner: String!, $name: String!, $cursor: String) {
 """
 
 
-def streaks(days: list[dict]) -> tuple[int, int]:
-    days = sorted(days, key=lambda d: d["date"])
-    current = best = run = 0
-    for d in days:
-        if d["contributionCount"] > 0:
-            run += 1
-            best = max(best, run)
-        else:
-            run = 0
-    for d in reversed(days):
-        if d["contributionCount"] > 0:
-            current += 1
-        else:
+def streak_stats(days: list[tuple[str, int]]) -> tuple[int, int]:
+    ordered = sorted(days)
+    best = run = 0
+    for _, count in ordered:
+        run = run + 1 if count else 0
+        best = max(best, run)
+    current = 0
+    for _, count in reversed(ordered):
+        if not count:
             break
+        current += 1
     return current, best
+
+
+def top_languages(sizes: dict[str, int], colours: dict[str, str], take: int = 5) -> list:
+    total = sum(sizes.values()) or 1
+    return [
+        (name, size * 100 / total, colours.get(name) or "#8b949e")
+        for name, size in sorted(sizes.items(), key=lambda kv: -kv[1])[:take]
+    ]
+
+
+def profile_graphql(tok: str) -> dict:
+    """Owner repos, stars, followers and language mix. Works with a repo-scoped token."""
+    user = gh(PROFILE_QUERY, {"login": LOGIN}, tok)["user"]
+    nodes = user["repositories"]["nodes"]
+    sizes: dict[str, int] = {}
+    colours: dict[str, str] = {}
+    targets = []
+    for node in nodes:
+        for edge in node["languages"]["edges"]:
+            name = edge["node"]["name"]
+            sizes[name] = sizes.get(name, 0) + edge["size"]
+            colours[name] = edge["node"]["color"] or "#8b949e"
+        branch = node["defaultBranchRef"]
+        owner, name = node["nameWithOwner"].split("/")
+        targets.append((owner, name, branch["target"]["history"]["totalCount"] if branch else 0))
+    return {
+        "repos": user["repositories"]["totalCount"],
+        "stars": sum(n["stargazers"]["totalCount"] for n in nodes),
+        "followers": user["followers"]["totalCount"],
+        "langs": top_languages(sizes, colours),
+        "targets": targets,
+    }
+
+
+def profile_rest(tok: str) -> dict:
+    """Fallback when GraphQL is unavailable."""
+    h = headers(tok)
+    r = requests.get(
+        f"{API}/users/{LOGIN}/repos",
+        params={"per_page": 100, "type": "owner", "sort": "pushed"},
+        headers=h,
+        timeout=40,
+    )
+    r.raise_for_status()
+    repos = [repo for repo in r.json() if not repo["fork"]]
+    sizes: dict[str, int] = {}
+    for repo in repos:
+        lr = requests.get(repo["languages_url"], headers=h, timeout=40)
+        if lr.status_code == 200:
+            for name, size in lr.json().items():
+                sizes[name] = sizes.get(name, 0) + size
+    me = requests.get(f"{API}/users/{LOGIN}", headers=h, timeout=40)
+    followers = me.json().get("followers", 0) if me.status_code == 200 else 0
+    return {
+        "repos": len(repos),
+        "stars": sum(repo["stargazers_count"] for repo in repos),
+        "followers": followers,
+        "langs": top_languages(sizes, {}),
+        "targets": [(LOGIN, repo["name"], 0) for repo in repos],
+    }
+
+
+def contributions_graphql(tok: str) -> tuple[int, int, int]:
+    calendar = gh(CONTRIB_QUERY, {"login": LOGIN}, tok)["user"]["contributionsCollection"][
+        "contributionCalendar"
+    ]
+    days = [
+        (day["date"], day["contributionCount"])
+        for week in calendar["weeks"]
+        for day in week["contributionDays"]
+    ]
+    current, best = streak_stats(days)
+    return calendar["totalContributions"], current, best
+
+
+def contributions_html() -> tuple[int, int, int]:
+    """GITHUB_TOKEN cannot read contributionsCollection, so read the public calendar page."""
+    page = requests.get(f"https://github.com/users/{LOGIN}/contributions", timeout=40)
+    page.raise_for_status()
+    html = page.text
+    ids = dict(
+        re.findall(
+            r'data-date="(\d{4}-\d{2}-\d{2})"[^>]*id="(contribution-day-component-[\d-]+)"', html
+        )
+    )
+    counts: dict[str, int] = {}
+    for cid, text in re.findall(
+        r'for="(contribution-day-component-[\d-]+)"[^>]*>([^<]*)</tool-tip>', html
+    ):
+        match = re.match(r"^(\d+|No) contributions?", text.strip())
+        counts[cid] = int(match.group(1)) if match and match.group(1).isdigit() else 0
+    days = [(when, counts.get(cid, 0)) for when, cid in ids.items()]
+    current, best = streak_stats(days)
+    return sum(count for _, count in days), current, best
 
 
 def repo_lines(owner: str, name: str, login: str, tok: str, head: int, cache: dict) -> dict:
     """Count my commits and their diff size in one repo, reusing cache when HEAD is unchanged."""
     key = f"{owner}/{name}"
     old = cache.get(key)
-    if old and old.get("head") == head:
+    if old and head and old.get("head") == head:
         return old
     commits = add = dele = 0
     cursor = None
@@ -488,63 +594,87 @@ def repo_lines(owner: str, name: str, login: str, tok: str, head: int, cache: di
     return result
 
 
+def repo_lines_rest(owner: str, name: str, tok: str, cache: dict) -> dict:
+    """Fallback for one repo. GitHub answers 202 while it computes the stats."""
+    key = f"{owner}/{name}"
+    payload = None
+    for attempt in range(4):
+        r = requests.get(f"{API}/repos/{owner}/{name}/stats/contributors", headers=headers(tok), timeout=40)
+        if r.status_code == 200:
+            payload = r.json()
+            break
+        if r.status_code != 202:
+            raise RuntimeError(f"HTTP {r.status_code}")
+        time.sleep(2**attempt)
+    if payload is None:
+        raise RuntimeError("stats still computing")
+    mine = [
+        c for c in payload if ((c.get("author") or {}).get("login") or "").lower() == LOGIN.lower()
+    ]
+    result = {
+        "head": cache.get(key, {}).get("head", 0),
+        "commits": sum(c["total"] for c in mine),
+        "add": sum(week["a"] for c in mine for week in c["weeks"]),
+        "del": sum(week["d"] for c in mine for week in c["weeks"]),
+    }
+    cache[key] = result
+    return result
+
+
 def collect(tok: str) -> dict:
     CACHE.mkdir(exist_ok=True)
     repo_cache = json.loads(REPO_CACHE.read_text()) if REPO_CACHE.exists() else {}
 
-    data = gh(USER_QUERY, {"login": LOGIN}, tok)
-    user = data["user"]
-    repos = user["repositories"]
-
-    lang_size: dict[str, int] = {}
-    lang_colour: dict[str, str] = {}
-    for node in repos["nodes"]:
-        for edge in node["languages"]["edges"]:
-            name = edge["node"]["name"]
-            lang_size[name] = lang_size.get(name, 0) + edge["size"]
-            lang_colour[name] = edge["node"]["color"] or "#8b949e"
+    try:
+        profile = profile_graphql(tok)
+        source = "graphql"
+    except Exception as exc:
+        print(f"profile via graphql failed ({exc}); using REST", file=sys.stderr)
+        profile = profile_rest(tok)
+        source = "rest"
 
     commits = loc_add = loc_del = 0
-    for node in repos["nodes"]:
-        branch = node["defaultBranchRef"]
-        if not branch:
-            continue
-        head = branch["target"]["history"]["totalCount"]
-        owner, name = node["nameWithOwner"].split("/")
-        stats = repo_lines(owner, name, LOGIN, tok, head, repo_cache)
-        commits += stats["commits"]
-        loc_add += stats["add"]
-        loc_del += stats["del"]
+    for owner, name, head in profile["targets"]:
+        key = f"{owner}/{name}"
+        try:
+            stats = (
+                repo_lines(owner, name, LOGIN, tok, head, repo_cache)
+                if source == "graphql"
+                else repo_lines_rest(owner, name, tok, repo_cache)
+            )
+        except Exception as exc:
+            stats = repo_cache.get(key)
+            if stats is None:
+                print(f"  {key}: skipped ({exc})", file=sys.stderr)
+                stats = {"commits": 0, "add": 0, "del": 0}
+            else:
+                print(f"  {key}: reusing cached numbers ({exc})", file=sys.stderr)
+        commits += stats.get("commits", 0)
+        loc_add += stats.get("add", 0)
+        loc_del += stats.get("del", 0)
 
     REPO_CACHE.write_text(json.dumps(repo_cache, indent=2, sort_keys=True))
 
-    days = [
-        d
-        for week in user["contributionsCollection"]["contributionCalendar"]["weeks"]
-        for d in week["contributionDays"]
-    ]
-    current, best = streaks(days)
-
-    total = sum(lang_size.values()) or 1
-    langs = [
-        (name, size * 100 / total, lang_colour[name])
-        for name, size in sorted(lang_size.items(), key=lambda kv: -kv[1])[:5]
-    ]
+    try:
+        contributions, streak, best = contributions_graphql(tok)
+    except Exception as exc:
+        print(f"contributions via graphql failed ({exc}); scraping calendar", file=sys.stderr)
+        contributions, streak, best = contributions_html()
 
     return {
         "updated": date.today().isoformat(),
         "age": age(),
-        "repos": repos["totalCount"],
-        "stars": sum(n["stargazers"]["totalCount"] for n in repos["nodes"]),
-        "contributions": user["contributionsCollection"]["contributionCalendar"]["totalContributions"],
-        "followers": user["followers"]["totalCount"],
+        "repos": profile["repos"],
+        "stars": profile["stars"],
+        "contributions": contributions,
+        "followers": profile["followers"],
         "commits": commits,
-        "streak": current,
+        "streak": streak,
         "best": best,
         "loc_add": loc_add,
         "loc_del": loc_del,
         "loc": loc_add - loc_del,
-        "langs": langs,
+        "langs": profile["langs"],
     }
 
 
