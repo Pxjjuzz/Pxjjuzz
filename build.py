@@ -457,6 +457,30 @@ query ($owner: String!, $name: String!, $cursor: String) {
 """
 
 
+LANG_COLOURS = {
+    "TypeScript": "#3178c6",
+    "Python": "#3572A5",
+    "JavaScript": "#f1e05a",
+    "CSS": "#663399",
+    "HTML": "#e34c26",
+    "SCSS": "#c6538c",
+    "PLpgSQL": "#336790",
+    "Java": "#b07219",
+    "Kotlin": "#A97BFF",
+    "C": "#555555",
+    "C++": "#f34b7d",
+    "C#": "#178600",
+    "Rust": "#dea584",
+    "Go": "#00ADD8",
+    "Swift": "#F05138",
+    "Dart": "#00B4AB",
+    "Shell": "#89e051",
+    "Vue": "#41b883",
+    "Svelte": "#ff3e00",
+    "Jupyter Notebook": "#DA5B0B",
+}
+
+
 def streak_stats(days: list[tuple[str, int]]) -> tuple[int, int]:
     ordered = sorted(days)
     best = run = 0
@@ -471,10 +495,12 @@ def streak_stats(days: list[tuple[str, int]]) -> tuple[int, int]:
     return current, best
 
 
-def top_languages(sizes: dict[str, int], colours: dict[str, str], take: int = 5) -> list:
+def top_languages(
+    sizes: dict[str, int], colours: dict[str, str], take: int = 5
+) -> list:
     total = sum(sizes.values()) or 1
     return [
-        (name, size * 100 / total, colours.get(name) or "#8b949e")
+        (name, size * 100 / total, colours.get(name) or LANG_COLOURS.get(name, "#8b949e"))
         for name, size in sorted(sizes.items(), key=lambda kv: -kv[1])[:take]
     ]
 

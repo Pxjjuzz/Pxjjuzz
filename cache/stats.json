@@ -3,39 +3,39 @@
   "age": "18y 10m 4d",
   "repos": 7,
   "stars": 5,
-  "contributions": 102,
+  "contributions": 100,
   "followers": 1,
-  "commits": 76,
+  "commits": 74,
   "streak": 18,
   "best": 18,
-  "loc_add": 101045,
-  "loc_del": 3511,
-  "loc": 97534,
+  "loc_add": 99889,
+  "loc_del": 3009,
+  "loc": 96880,
   "langs": [
     [
       "TypeScript",
       85.7749653259362,
-      "#8b949e"
+      "#3178c6"
     ],
     [
       "Python",
       10.122473186436636,
-      "#8b949e"
+      "#3572A5"
     ],
     [
       "CSS",
       1.8068560508594775,
-      "#8b949e"
+      "#663399"
     ],
     [
       "JavaScript",
       1.0981558418737174,
-      "#8b949e"
+      "#f1e05a"
     ],
     [
       "PLpgSQL",
       1.0405357064409035,
-      "#8b949e"
+      "#336790"
     ]
   ]
 }
