@@ -50,7 +50,6 @@ PROJECTS = [
     ("VenueOne", "venue booking platform"),
     ("SNAPBREEDAI", "breed classifier, Streamlit"),
 ]
-LINKS = ["github.com/Pxjjuzz", "linkedin.com/in/prajwal-poojary-b4a53a386", "prajwalpoojary834@gmail.com"]
 
 # ---------------------------------------------------------------------------
 # canvas
@@ -202,8 +201,14 @@ def leaders(col: float, count: int, t: dict) -> str:
 
 
 def section(label: str, t: dict) -> str:
-    rule = "─" * int((PANEL_W / ADVANCE) - len(label) - 3)
-    return row_of((0, label.upper(), t["muted"]), (len(label) + 1, " " + rule, t["frame"]))
+    # Rule is pinned to the panel width so the dashes cannot spill past the card.
+    cols = (PANEL_W / ADVANCE) - len(label) - 4
+    return (
+        row_of((0, label.upper(), t["muted"]))
+        + f'<tspan x="{x_of(len(label) + 2)}" fill="{t["frame"]}" '
+        f'textLength="{round(cols * ADVANCE, 1)}" lengthAdjust="spacingAndGlyphs">'
+        f'{"─" * int(cols)}</tspan>'
+    )
 
 
 def indent(text: str, t: dict) -> str:
@@ -290,9 +295,12 @@ def render(theme_name: str, stats: dict, light_art: str = "tile") -> str:
     text_row(section("system", t), height=20, dy=4)
     text_row(kv("OS", ABOUT["os"], 26, t))
     text_row(kv("Uptime", stats["age"], 26, t))
-    text_row(kv("Host", "SSCE Bangalore.", 26, t))
+    text_row(kv("Host", ABOUT["host"], 26, t))
     text_row(kv("Kernel", ABOUT["kernel"], 26, t))
-    text_row(kv("IDE", ABOUT["ide"], 26, t))
+    ide_main, _, ide_last = ABOUT["ide"].rpartition(", ")
+    text_row(kv("IDE", f"{ide_main}," if ide_last else ABOUT["ide"], 26, t))
+    if ide_last:
+        text_row(indent(ide_last, t))
 
     # stack ----------------------------------------------------------------
     text_row(section("stack", t), height=20, dy=12)
@@ -304,11 +312,7 @@ def render(theme_name: str, stats: dict, light_art: str = "tile") -> str:
     text_row(section("github", t), height=20, dy=12)
     text_row(
         kv("Repositories", fmt(stats["repos"]), 19, t)
-        + kv("Stars", fmt(stats["stars"]), 43, t, key_col=26)
-    )
-    text_row(
-        kv("Contributions", fmt(stats["contributions"]), 19, t)
-        + kv("Followers", fmt(stats["followers"]), 43, t, key_col=26)
+        + kv("Contributions", fmt(stats["contributions"]), 43, t, key_col=26)
     )
     text_row(
         kv("Commits", fmt(stats["commits"]), 19, t)
@@ -317,14 +321,9 @@ def render(theme_name: str, stats: dict, light_art: str = "tile") -> str:
     text_row(kv("Lines of code", fmt(stats["loc"]), 19, t))
     added = f'+{fmt(stats["loc_add"])}'
     removed = f'-{fmt(stats["loc_del"])}'
-    del_col = 1 + len(added) + 3
     text_row(
-        row_of(
-            (1, added, t["green"]),
-            (1 + len(added), " ++", t["green"]),
-            (del_col, removed, t["red"]),
-            (del_col + len(removed), " --", t["red"]),
-        )
+        f'<tspan x="{x_of(1)}" fill="{t["green"]}">{added}</tspan>'
+        f'<tspan dx="12" fill="{t["red"]}">{removed}</tspan>'
         + kv("best streak", f'{stats["best"]}d', 43, t, key_col=26),
         height=18,
     )
