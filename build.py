@@ -482,7 +482,14 @@ LANG_COLOURS = {
 
 
 def streak_stats(days: list[tuple[str, int]]) -> tuple[int, int]:
+    """Current and best run of days with contributions.
+
+    Today counts only once it has a contribution: a blank today is a day still in
+    progress, not a broken streak.
+    """
     ordered = sorted(days)
+    if ordered and ordered[-1][0] == date.today().isoformat() and not ordered[-1][1]:
+        ordered = ordered[:-1]
     best = run = 0
     for _, count in ordered:
         run = run + 1 if count else 0
