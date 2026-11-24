@@ -280,6 +280,10 @@ def render(theme_name: str, stats: dict, light_art: str = "tile") -> str:
         f'<text x="{PANEL_X}" y="{round(y, 2)}" font-size="14" fill="{t["muted"]}">'
         f'BE AIML · Bengaluru, India</text>'
     )
+    panel.append(
+        f'<text x="{x_of(53)}" y="{round(y, 2)}" font-size="12" fill="{t["muted"]}" '
+        f'text-anchor="end">synced {esc(stats["updated"])}</text>'
+    )
     y += 20
     panel.append(
         f'<circle cx="{round(PANEL_X + 4, 1)}" cy="{round(y - 4.6, 1)}" r="4" '
