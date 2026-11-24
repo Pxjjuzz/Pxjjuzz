@@ -738,6 +738,19 @@ SAMPLE = {
 }
 
 
+def stamp_readme(version: str) -> None:
+    """Pin the README image URLs to the render date.
+
+    The raw route and browsers both cache the SVG for five minutes, so an unchanged
+    URL can keep showing yesterday's card. A versioned URL is a cache miss.
+    """
+    readme = ROOT / "README.md"
+    text = readme.read_text(encoding="utf-8")
+    stamped = re.sub(r"((?:dark|light)_mode\.svg)(?:\?v=[^\"\s]+)?", r"\1?v=" + version, text)
+    if stamped != text:
+        readme.write_text(stamped, encoding="utf-8")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--offline", action="store_true", help="use cache/stats.json only")
@@ -768,6 +781,8 @@ def main() -> int:
             render(theme, stats, args.light_art), encoding="utf-8"
         )
     print(f"rendered {out} ({stats['repos']} repos, {stats['commits']} commits)")
+    if not args.sample:
+        stamp_readme(stats["updated"])
     return 0
 
 
